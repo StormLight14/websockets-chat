@@ -8,8 +8,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use chrono::prelude::*;
-
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
 
@@ -19,7 +17,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
 
-async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: SocketAddr) {
+async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: SocketAddr, users: Arc<Mutex<Vec<(SocketAddr, String)>>>) {
     //println!("Incoming TCP connection from: {}", addr);
 
     let ws_stream = tokio_tungstenite::accept_async(raw_stream)
@@ -34,11 +32,29 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
     let (outgoing, incoming) = ws_stream.split();
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
-        println!(
-            "Received a message from {}: {}",
-            addr,
-            msg.to_text().unwrap()
-        );
+        let msg_text = msg.to_text().unwrap();
+        if msg_text.starts_with("[JOINED]:") {
+            let joined_username = msg_text.replace("[JOINED]: ", "");
+            let mut can_join = true;
+            let mut users = users.lock().unwrap();
+            for (_user_addr, username) in users.iter() {
+                if &joined_username == username {
+                    can_join = false;
+                    println!("A user tried to join with the username {}, but that was already taken.", username);
+                    peer_map.lock().unwrap().remove(&addr);
+                } else {
+                    println!("{}", username);
+                }
+            }
+
+            if can_join {
+                println!("User {} joined from {}.", joined_username, addr);
+                users.push((addr, joined_username));
+            }
+
+        } else {
+            println!("Received a message from {}: {}", addr, msg.to_text().unwrap());
+        }
 
         let mut log_file = OpenOptions::new()
             .create(true)
@@ -69,7 +85,9 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
 
     pin_mut!(broadcast_incoming, receive_from_others);
     future::select(broadcast_incoming, receive_from_others).await;
-
+    
+    let mut users = users.lock().unwrap();
+    users.retain(|(address, _)| *address != addr); // remove all users of the same address 
     println!("{} disconnected", &addr);
     peer_map.lock().unwrap().remove(&addr);
 }
@@ -81,6 +99,7 @@ async fn main() -> Result<(), IoError> {
         .unwrap_or_else(|| "127.0.0.1:8080".to_string());
 
     let state = PeerMap::new(Mutex::new(HashMap::new()));
+    let users = Arc::new(Mutex::new(Vec::new()));
 
     // Create the event loop and TCP listener we'll accept connections on.
     let try_socket = TcpListener::bind(&addr).await;
@@ -89,7 +108,7 @@ async fn main() -> Result<(), IoError> {
 
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
-        tokio::spawn(handle_connection(state.clone(), stream, addr));
+        tokio::spawn(handle_connection(state.clone(), stream, addr, users.clone()));
     }
 
     Ok(())
