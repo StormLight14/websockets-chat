@@ -51,7 +51,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
             if can_join {
                 println!("User {} joined from {}.", joined_username, addr);
                 users.push((addr, joined_username.clone()));
-                server_msgs.push(format!("User {} has joined.", joined_username));
+                server_msgs.push(format!("[SERVER]: User {} has joined.", joined_username));
             }
         } else {
             println!("Received a message from {}: {}", addr, msg.to_text().unwrap());
@@ -79,7 +79,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
             println!("{:?}", server_msgs);
             for message in server_msgs.iter() {
                 recp.unbounded_send(Message::text(message)).unwrap();
-                //println!("Server sent out: {}", message);
+                println!("Server sent out: {}", message);
             }
             recp.unbounded_send(msg.clone()).unwrap();
         }
