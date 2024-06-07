@@ -19,7 +19,7 @@ type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
 
 async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: SocketAddr, users: Arc<Mutex<Vec<(SocketAddr, String)>>>) {
     //println!("Incoming TCP connection from: {}", addr);
-
+    let mut server_msgs: Vec<String> = Vec::new();
     let ws_stream = tokio_tungstenite::accept_async(raw_stream)
         .await
         .expect("Error during the websocket handshake occurred");
@@ -33,25 +33,26 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
         let msg_text = msg.to_text().unwrap();
-        if msg_text.starts_with("[JOINED]:") {
-            let joined_username = msg_text.replace("[JOINED]: ", "");
+        if msg_text.starts_with("[JOIN_ATTEMPT]") {
+            let joined_username = msg_text.replace("[JOIN_ATTEMPT] ", "");
             let mut can_join = true;
             let mut users = users.lock().unwrap();
             for (_user_addr, username) in users.iter() {
                 if &joined_username == username {
                     can_join = false;
                     println!("A user tried to join with the username {}, but that was already taken.", username);
+                    if let Some(tx) = peer_map.lock().unwrap().get(&addr) {
+                        tx.unbounded_send(Message::text("[SERVER_RESPONSE] That username is already taken.")).unwrap();
+                    }
                     peer_map.lock().unwrap().remove(&addr);
-                } else {
-                    println!("{}", username);
                 }
             }
 
             if can_join {
                 println!("User {} joined from {}.", joined_username, addr);
-                users.push((addr, joined_username));
+                users.push((addr, joined_username.clone()));
+                server_msgs.push(format!("User {} has joined.", joined_username));
             }
-
         } else {
             println!("Received a message from {}: {}", addr, msg.to_text().unwrap());
         }
@@ -75,6 +76,11 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
             .map(|(_, ws_sink)| ws_sink);
 
         for recp in broadcast_recipients {
+            println!("{:?}", server_msgs);
+            for message in server_msgs.iter() {
+                recp.unbounded_send(Message::text(message)).unwrap();
+                //println!("Server sent out: {}", message);
+            }
             recp.unbounded_send(msg.clone()).unwrap();
         }
 

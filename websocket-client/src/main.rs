@@ -8,10 +8,12 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 #[tokio::main]
 async fn main() {
-    let connect_addr = "ws://127.0.0.1:8080";
-    let username = env::args()
+    let connect_addr = env::args()
         .nth(1)
-        .unwrap_or_else(|| panic!("this program requires at least one argument."));
+        .unwrap_or_else(|| "ws://127.0.0.1:8080".to_string());
+    let username = env::args()
+        .nth(2)
+        .unwrap_or_else(|| panic!("second arg should be a username."));
 
     let url = url::Url::parse(&connect_addr).unwrap();
 
